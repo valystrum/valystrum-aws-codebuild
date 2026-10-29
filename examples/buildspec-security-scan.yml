@@ -1,0 +1,50 @@
+# Valystrum security scan for AWS CodeBuild. Copy to buildspec-security-scan.yml in your repository, with
+# valystrum-scan.sh copied to .valystrum/valystrum-scan.sh, and name this file as the build project's buildspec.
+# Setup, pull request builds and CodePipeline: README.md.
+version: 0.2
+
+env:
+  shell: bash
+  variables:
+    # Replace acme with your organisation's slug in Valystrum.
+    VALYSTRUM_SCAN_URL: https://app.valystrum.io/api/v1/acme/pipeline/scan
+    # Your repository's default branch: the branch that decides a finding once it has read the file.
+    VALYSTRUM_DEFAULT_BRANCH: main
+    VALYSTRUM_SEND_FILES: "true"
+    VALYSTRUM_FAIL_ON_FINDINGS: "true"
+    VALYSTRUM_FAIL_ON_ERROR: "false"
+    VALYSTRUM_JUNIT: valystrum-reports/junit.xml
+  secrets-manager:
+    # The repository's CI secret, stored in AWS Secrets Manager as the key webhookSecret of the secret valystrum/ci.
+    VALYSTRUM_SECRET: valystrum/ci:webhookSecret
+
+phases:
+  build:
+    commands:
+      - |
+        # CodeBuild's own variables. A build a webhook started names its branch and, for a pull request, the target
+        # branch; a push names the commit before it. A build CodePipeline started passes VALYSTRUM_REPO,
+        # VALYSTRUM_BRANCH and VALYSTRUM_COMMIT itself (README.md), and those win over what is worked out here.
+        export VALYSTRUM_REPO="${VALYSTRUM_REPO:-$(printf '%s' "${CODEBUILD_SOURCE_REPO_URL:-}" | sed -E 's#^[a-z]+://[^/]+/##; s#\.git$##')}"
+        HEAD_REF="${CODEBUILD_WEBHOOK_HEAD_REF:-}"
+        BASE_REF="${CODEBUILD_WEBHOOK_BASE_REF:-}"
+        export VALYSTRUM_BRANCH="${VALYSTRUM_BRANCH:-${HEAD_REF#refs/heads/}}"
+        export VALYSTRUM_BASE="${VALYSTRUM_BASE:-${BASE_REF#refs/heads/}}"
+        [ -n "$VALYSTRUM_BASE" ] || export VALYSTRUM_BASE="${CODEBUILD_WEBHOOK_PREV_COMMIT:-}"
+        export VALYSTRUM_COMMIT="${VALYSTRUM_COMMIT:-${CODEBUILD_RESOLVED_SOURCE_VERSION:-}}"
+        # The project's build number grows with every build: Valystrum orders a branch's scans by it.
+        export VALYSTRUM_SEQUENCE="${VALYSTRUM_SEQUENCE:-${CODEBUILD_BUILD_NUMBER:-}}"
+        case "${CODEBUILD_WEBHOOK_TRIGGER:-}" in pr/*) export VALYSTRUM_PR_NUMBER="${CODEBUILD_WEBHOOK_TRIGGER#pr/}" ;; esac
+        bash .valystrum/valystrum-scan.sh
+
+reports:
+  # Each finding as a failed test case in the build's Reports tab (a report group named after the project).
+  valystrum-security-scan:
+    base-directory: valystrum-reports
+    files:
+      - junit.xml
+    file-format: JUNITXML
+
+artifacts:
+  files:
+    - valystrum-reports/**/*

@@ -1,0 +1,34 @@
+# Valystrum SBOM for AWS CodeBuild. Copy to buildspec-sbom.yml in your repository, with valystrum-sbom.sh copied to
+# .valystrum/valystrum-sbom.sh, and run it for the default branch only (README.md). This one reads an npm project;
+# for Python, install python3 with venv instead (the generator reads the lock or requirements file and installs
+# nothing); for Go or Maven, that toolchain.
+version: 0.2
+
+env:
+  shell: bash
+  variables:
+    # Replace acme with your organisation's slug in Valystrum.
+    VALYSTRUM_INGEST_URL: https://app.valystrum.io/api/v1/acme/sbom/ingest
+    VALYSTRUM_PATH: "."
+    VALYSTRUM_ECOSYSTEM: auto
+    # VALYSTRUM_ASSET: Checkout API   # the Valystrum asset these components belong to
+    # This build uploads the whole repository: what it no longer lists is removed in Valystrum. Run it for the default
+    # branch only, and set it to "false" if other builds upload parts of the same source.
+    VALYSTRUM_COMPLETE: "true"
+  secrets-manager:
+    VALYSTRUM_SECRET: valystrum/ci:webhookSecret
+
+phases:
+  install:
+    commands:
+      # The CycloneDX generator reads the INSTALLED dependency tree, not the lockfile alone.
+      - npm ci --ignore-scripts --no-audit --no-fund
+  build:
+    commands:
+      - |
+        export VALYSTRUM_SOURCE="${VALYSTRUM_SOURCE:-$(printf '%s' "${CODEBUILD_SOURCE_REPO_URL:-}" | sed -E 's#^[a-z]+://[^/]+/##; s#\.git$##')}"
+        bash .valystrum/valystrum-sbom.sh
+
+artifacts:
+  files:
+    - valystrum-reports/sbom.cdx.json
